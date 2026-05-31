@@ -24,14 +24,29 @@ type MPVParams struct {
 	LuaScript        string // geçici Lua script yolu (chapter inject + skip için)
 }
 
-// isMPVInstalled fonksiyonu, sistemde MPV oynatıcısının yüklü olup olmadığını kontrol eder.
-func isMPVInstalled() error {
-	mpvBinary := "mpv"
+// resolveMPVBinary MPV'nin tam yolunu bulur. Hem sistem PATH'ini hem de .exe'nin yanındaki klasörü kontrol eder.
+func resolveMPVBinary() (string, error) {
+	mpvName := "mpv"
 	if runtime.GOOS == "windows" {
-		mpvBinary = "mpv.exe"
+		mpvName = "mpv.exe"
 	}
-	_, err := exec.LookPath(mpvBinary) // MPV'nin sistemde bulunup bulunmadığını kontrol eder
-	return err
+
+	// 1. Önce sistem PATH'inde ara
+	if path, err := exec.LookPath(mpvName); err == nil {
+		return path, nil
+	}
+
+	// 2. Uygulama ile aynı klasörde olup olmadığına bak (özellikle Windows taşınabilir kullanım için)
+	exePath, err := os.Executable()
+	if err == nil {
+		exeDir := filepath.Dir(exePath)
+		localMpv := filepath.Join(exeDir, mpvName)
+		if _, err := os.Stat(localMpv); err == nil {
+			return localMpv, nil
+		}
+	}
+
+	return "", errors.New("mpv sisteminizde yüklü değil veya bulunamadı")
 }
 
 // getMPVSocketPath platforma göre IPC yolunu döner
@@ -44,21 +59,14 @@ func getMPVSocketPath() string {
 	return filepath.Join(os.TempDir(), "anitr-cli-410.sock")
 }
 
-// getMPVBinary platforma göre mpv binary adını döner
-func getMPVBinary() string {
-	if runtime.GOOS == "windows" {
-		return "mpv.exe"
-	}
-	return "mpv"
-}
-
 // Play fonksiyonu, verilen parametrelerle MPV oynatıcıyı başlatır.
 func Play(params MPVParams) (*exec.Cmd, string, error) {
 	mpvSocketPath := getMPVSocketPath()
 
-	// MPV'nin yüklü olup olmadığını kontrol et
-	if err := isMPVInstalled(); err != nil {
-		return nil, "", errors.New("mpv sisteminizde yüklü değil") // Yükleme hatası
+	// MPV'nin yolunu bul (PATH veya yanındaki klasör)
+	mpvBinary, err := resolveMPVBinary()
+	if err != nil {
+		return nil, "", err
 	}
 
 	// MPV başlatma komutunu oluştur
@@ -108,7 +116,6 @@ func Play(params MPVParams) (*exec.Cmd, string, error) {
 	// Video URL'sini ekle
 	args = append(args, params.Url)
 
-	mpvBinary := getMPVBinary()
 	cmd := exec.Command(mpvBinary, args...)
 	if err := cmd.Start(); err != nil {
 		return cmd, "", err // Başlatma hatası

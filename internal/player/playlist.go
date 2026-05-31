@@ -111,8 +111,7 @@ func PlayWithPlaylist(params []MPVParams, startIndex int) (*exec.Cmd, string, er
 
 	mpvSocketPath := getMPVSocketPath()
 
-	// MPV'nin yüklü olup olmadığını kontrol et
-	if err := isMPVInstalled(); err != nil {
+	if _, err := resolveMPVBinary(); err != nil {
 		return nil, "", errors.New("mpv sisteminizde yüklü değil")
 	}
 
@@ -153,7 +152,10 @@ func PlayWithPlaylist(params []MPVParams, startIndex int) (*exec.Cmd, string, er
 	// Playlist dosyasını ekle
 	args = append(args, fmt.Sprintf("--playlist=%s", playlistPath))
 
-	mpvBinary := getMPVBinary()
+	mpvBinary, err := resolveMPVBinary()
+	if err != nil {
+		return nil, "", err
+	}
 	cmd := exec.Command(mpvBinary, args...)
 	if err := cmd.Start(); err != nil {
 		os.Remove(playlistPath)
