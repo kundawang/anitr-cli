@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ConfigDir platforma göre config dizinini döner.
@@ -51,7 +52,7 @@ func ConfigDir() string {
 
 // IsValidImage, verilen URL'nin geçerli bir görsel olup olmadığını kontrol eder.
 func IsValidImage(url string) bool {
-	client := &http.Client{}
+	client := &http.Client{Timeout: 5 * time.Second}
 	req, err := http.NewRequest("HEAD", url, nil)
 	if err != nil {
 		return false

@@ -30,6 +30,15 @@ type AnimeDetails struct {
 			Type string `json:"type"`
 		} `json:"entry"`
 	} `json:"relations"`
+	Images Images `json:"images"`
+}
+
+// GetBannerImage returns the high quality large image prioritizing webp format for detail views
+func (a *AnimeDetails) GetBannerImage() string {
+	if a.Images.WebP.LargeImageURL != "" {
+		return a.Images.WebP.LargeImageURL
+	}
+	return a.Images.Jpg.LargeImageURL
 }
 
 type AnimeDetailsResponse struct {

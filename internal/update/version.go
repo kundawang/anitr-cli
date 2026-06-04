@@ -13,5 +13,5 @@ var githubAPI string = fmt.Sprintf("https://api.github.com/repos/%s/releases/lat
 var repoLink string = fmt.Sprintf("https://github.com/%s", GithubRepo)
 
 // -v/--version bilgisi için
-var version string = "dev"
+var version string = "v4.8.0"
 var buildEnv string = "unknown"

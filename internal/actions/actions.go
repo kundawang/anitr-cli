@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"os"
 	"path/filepath"
 	"slices"
@@ -11,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/prayjofir/anitr-cli/internal"
 	"github.com/prayjofir/anitr-cli/internal/config"
@@ -25,6 +28,7 @@ import (
 	"github.com/prayjofir/anitr-cli/internal/sources/aniziumfree"
 	"github.com/prayjofir/anitr-cli/internal/sources/openanime"
 	"github.com/prayjofir/anitr-cli/internal/ui"
+	"github.com/prayjofir/anitr-cli/internal/ui/ascii"
 	"github.com/prayjofir/anitr-cli/internal/ui/tui"
 	"github.com/prayjofir/anitr-cli/internal/utils"
 )
@@ -157,9 +161,12 @@ func PlayAnimeLoop(
 	var animeAired string
 	var animeGenres []string
 
-	// Anime detaylarını bir kere çek (Özet hariç kompakt form)
-	animeDetailsStr := ""
+	// Anime detaylarını bir kere çek
+	var animeDetailsBuilder func(int) string
+
+	var currentMalID int
 	if malID, err := jikan.GetMalIDByTitle(selectedAnimeName); err == nil && malID > 0 {
+		currentMalID = malID
 		if details, err := jikan.GetAnimeDetails(malID); err == nil && details != nil {
 			animeScore = details.Score
 			animeYear = details.Year
@@ -171,13 +178,13 @@ func PlayAnimeLoop(
 				animeGenres = append(animeGenres, g.Name)
 			}
 
-			var sb strings.Builder
-			sb.WriteString(fmt.Sprintf("=== %s ===\n", selectedAnimeName))
+			var textSb strings.Builder
+			textSb.WriteString(fmt.Sprintf("=== %s ===\n", selectedAnimeName))
 			
 			if animeYear > 0 {
-				sb.WriteString(fmt.Sprintf("Puan: ⭐ %.2f/10  |  Çıkış Yılı: %d  |  Durum: %s\n", details.Score, animeYear, details.Status))
+				textSb.WriteString(fmt.Sprintf("Puan: ⭐ %.2f/10\nÇıkış Yılı: %d\nDurum: %s\n", details.Score, animeYear, details.Status))
 			} else {
-				sb.WriteString(fmt.Sprintf("Puan: ⭐ %.2f/10  |  Durum: %s\n", details.Score, details.Status))
+				textSb.WriteString(fmt.Sprintf("Puan: ⭐ %.2f/10\nDurum: %s\n", details.Score, details.Status))
 			}
 			
 			genres := []string{}
@@ -185,7 +192,7 @@ func PlayAnimeLoop(
 				genres = append(genres, g.Name)
 			}
 			if len(genres) > 0 {
-				sb.WriteString(fmt.Sprintf("Türler: %s\n", strings.Join(genres, ", ")))
+				textSb.WriteString(fmt.Sprintf("\nTürler: %s\n", strings.Join(genres, ", ")))
 			}
 			
 			relations := []string{}
@@ -206,17 +213,47 @@ func PlayAnimeLoop(
 				relations = append(relations, fmt.Sprintf("- %s: %s", r.Relation, strings.Join(names, ", ")))
 			}
 			if len(relations) > 0 {
-				sb.WriteString(fmt.Sprintf("\nİlişkili Seriler:\n%s\n", strings.Join(relations, "\n")))
+				textSb.WriteString(fmt.Sprintf("\nİlişkili Seriler:\n%s\n", strings.Join(relations, "\n")))
 			}
-			animeDetailsStr = sb.String()
+			
+			textContent := textSb.String()
+
+			var cachedImage image.Image
+			if helpers.IsValidImage(posterURL) {
+				cachedImage, _ = ascii.FetchImage(posterURL)
+			}
+
+			animeDetailsBuilder = func(termW int) string {
+				if cachedImage != nil {
+					panelW := termW - 54 // tui.go calculates rightPanel width as m.width - 48 - 6
+					innerW := panelW - 8 // tui.go has Border (2) + Padding (4) = 6. Using 8 for safety margin.
+					if innerW < 10 {
+						innerW = 10
+					}
+					
+					asciiW := 22
+					if innerW > asciiW + 15 {
+						textW := innerW - asciiW - 4
+						asciiArt := ascii.GenerateASCIIArtFromImage(cachedImage, asciiW)
+						wrappedText := lipgloss.NewStyle().Width(textW).Render(textContent)
+						return lipgloss.JoinHorizontal(lipgloss.Top, asciiArt, "   ", wrappedText)
+					} else {
+						asciiArt := ascii.GenerateASCIIArtFromImage(cachedImage, innerW)
+						return lipgloss.JoinVertical(lipgloss.Left, asciiArt, "\n", textContent)
+					}
+				}
+				return textContent
+			}
+			
 		} else {
-			animeDetailsStr = fmt.Sprintf("Detaylar alınamadı:\n%v", err)
+			errMsg := fmt.Sprintf("Detaylar alınamadı:\n%v", err)
+			animeDetailsBuilder = func(w int) string { return errMsg }
 		}
 	} else {
-		animeDetailsStr = fmt.Sprintf("MyAnimeList ID bulunamadı:\n%v\n\n(Büyük ihtimalle isim çok uzun veya farklı yazılmış)", err)
+		errMsg := fmt.Sprintf("MyAnimeList ID bulunamadı:\n%v\n\n(Büyük ihtimalle isim çok uzun veya farklı yazılmış)", err)
+		animeDetailsBuilder = func(w int) string { return errMsg }
 	}
-	
-	// DEBUG YAZDIRMA
+
 
 
 	for {
@@ -230,7 +267,6 @@ func PlayAnimeLoop(
 			autoPlayTriggered = true
 			option = "İzle"
 		} else {
-			// Kullanıcıya sunulacak menü seçenekleri
 			watchMenu := []string{}
 			if !isMovie {
 				watchMenu = append(watchMenu, "İzle", "Sonraki bölüm", "Önceki bölüm", "Bölüm seç", "Tüm sezonu izle", "────────────────────", "Çözünürlük seç", "Bölüm indir")
@@ -238,7 +274,6 @@ func PlayAnimeLoop(
 				watchMenu = append(watchMenu, "İzle", "Çözünürlük seç", "Movie indir")
 			}
 
-			// OpenAnime için fansub seçimi
 			if strings.ToLower(SelectedSource) == "openanime" {
 				idx := -1
 				for i, v := range watchMenu {
@@ -268,7 +303,7 @@ func PlayAnimeLoop(
 			}
 
 			// Seçim arayüzünü göster
-			option, err = utils.ShowSelectionWithPanel(models.App{UiMode: &UiMode, RofiFlags: &RofiFlags}, watchMenu, menuTitle, animeDetailsStr)
+			option, err = utils.ShowSelectionWithPanel(models.App{UiMode: &UiMode, RofiFlags: &RofiFlags}, watchMenu, menuTitle, animeDetailsBuilder)
 
 			if errors.Is(err, tui.ErrGoBack) {
 				return nil, "", err
@@ -616,7 +651,7 @@ func PlayAnimeLoop(
 			var stopCh chan struct{}
 			if !DisableRPC {
 				stopCh = make(chan struct{}) // Goroutine'i durdurmak için kanal oluştur
-				go utils.UpdateDiscordRPC(socketPath, episodeNames, selectedEpisodeIndex, selectedAnimeName, SelectedSource, posterURL, timestamp, Logger, stopCh)
+				go utils.UpdateDiscordRPC(socketPath, episodes, selectedEpisodeIndex, selectedAnimeName, SelectedSource, posterURL, timestamp, currentMalID, Logger, stopCh)
 			}
 
 			var selectedAnimeId string
@@ -1090,11 +1125,14 @@ func PlayAnimeLoop(
 					utils.LogError(Logger, err)
 				}
 			}
-
 			var stopCh chan struct{}
 			if !DisableRPC {
+				var currentMalID int
+				if mID, err := jikan.GetMalIDByTitle(selectedAnimeName); err == nil {
+					currentMalID = mID
+				}
 				stopCh = make(chan struct{})
-				go utils.UpdateDiscordRPC(socketPath, seasonEpisodeNames, startIndex, selectedAnimeName, SelectedSource, posterURL, timestamp, Logger, stopCh)
+				go utils.UpdateDiscordRPC(socketPath, seasonEpisodes, startIndex, selectedAnimeName, SelectedSource, posterURL, timestamp, currentMalID, Logger, stopCh)
 			}
 
 			// Playlist tracking için goroutine (startIndex ile, genel indexleri de geç)

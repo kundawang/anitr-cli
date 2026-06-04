@@ -18,6 +18,7 @@ type Config struct {
 	PreferredSubtitle string `json:"preferred_subtitle"` // "tr", "en", "de", "ar", "fr", "es", "it"
 	PreferredSound    string `json:"preferred_sound"`    // "original", "trdub", "endub", "cndub"
 	MALUsername       string `json:"mal_username"`       // Jikan API izleme listesi için
+	AniListToken      string `json:"anilist_token"`      // AniList otomatik senkronizasyon için GraphQL token
 }
 
 // LoadConfig config'i yükler

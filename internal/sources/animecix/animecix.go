@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/prayjofir/anitr-cli/internal"
 	"github.com/prayjofir/anitr-cli/internal/helpers"
@@ -414,7 +415,8 @@ func FetchAnimeEpisodesData(id int) ([]map[string]interface{}, error) {
 // AnimeWatchApiUrl, anime için izleme verilerini döner
 func AnimeWatchApiUrl(Url string) ([]map[string]string, error) {
 	watch_url := fmt.Sprintf("%s%s", configAnimecix.BaseUrl, Url)
-	resp, err := http.Get(watch_url)
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Get(watch_url)
 	if err != nil {
 		return nil, err
 	}
@@ -443,7 +445,7 @@ func AnimeWatchApiUrl(Url string) ([]map[string]string, error) {
 	vid := queryParams.Get("vid")
 
 	apiUrl := fmt.Sprintf("https://%s/api/video/%s?vid=%s", configAnimecix.VideoPlayers[0], embedID, vid)
-	response, err := http.Get(apiUrl)
+	response, err := client.Get(apiUrl)
 	if err != nil {
 		return nil, fmt.Errorf("video verileri alınamadı: %w", err)
 	}
@@ -565,7 +567,7 @@ func AnimeMovieWatchApiUrl(id int) (map[string]interface{}, error) {
 		}
 
 		// Video URL'yi çözümle
-		client := &http.Client{}
+		client := &http.Client{Timeout: 15 * time.Second}
 		req, err := http.NewRequest("GET", videoUrl, nil)
 		if err != nil {
 			return nil, fmt.Errorf("HTTP isteği oluşturulamadı: %w", err)
@@ -603,7 +605,7 @@ func AnimeMovieWatchApiUrl(id int) (map[string]interface{}, error) {
 		// Video verilerini al
 		apiUrl := fmt.Sprintf("https://%s/api/video/%s?vid=%s", configAnimecix.VideoPlayers[0], embedID, vid)
 
-		response, err := http.Get(apiUrl)
+		response, err := client.Get(apiUrl)
 		if err != nil {
 			return nil, fmt.Errorf("video verileri alınamadı: %w", err)
 		}

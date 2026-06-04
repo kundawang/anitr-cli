@@ -496,9 +496,19 @@ func clearMPVCache() float64 {
 				os.Remove(p)
 			}
 		}
-	}
+}
 
 	return float64(totalBytes) / (1024 * 1024)
+}
+
+func maskToken(token string) string {
+	if len(token) <= 10 {
+		if token == "" {
+			return "Yok"
+		}
+		return "***"
+	}
+	return token[:5] + "..." + token[len(token)-5:]
 }
 
 func settingsMenu(cfx *models.App) {
@@ -548,6 +558,7 @@ func settingsMenu(cfx *models.App) {
 			"Tercih Edilen Altyazı : " + subtitleLabel(cfg.PreferredSubtitle),
 			"Tercih Edilen Ses : " + soundLabel(cfg.PreferredSound),
 			"MAL Kullanıcı Adı : " + cfg.MALUsername,
+			"AniList Senkronizasyon Tokeni",
 			"Geri",
 		}
 
@@ -741,7 +752,34 @@ func settingsMenu(cfx *models.App) {
 				}
 			}
 
-		case menuOptions[8]: // Geri
+		case menuOptions[8]: // AniList Senkronizasyon Tokeni
+			fmt.Println("\n=== AniList Otomatik Senkronizasyon ===")
+			fmt.Println("Bölümleri izlerken AniList hesabınızın otomatik güncellenmesi için bir Personal Access Token gereklidir.")
+			fmt.Println("\nToken almak için:")
+			fmt.Println("1. Tarayıcınızda https://anilist.co/settings/developer adresine gidin.")
+			fmt.Println("2. 'Create New Client' butonuna tıklayın.")
+			fmt.Println("3. Name: 'anitr-cli', Redirect URL: 'https://anilist.co/api/v2/oauth/pin' yazıp kaydedin.")
+			fmt.Println("4. Kaydettikten sonra oluşan 'Client ID' numarasını kopyalayın.")
+			fmt.Println("5. Tarayıcıda şu adrese gidin: https://anilist.co/api/v2/oauth/authorize?client_id=ID_NUMARANIZ&response_type=token")
+			fmt.Println("6. Çıkan ekranda 'Approve' butonuna tıklayın. Ekranda beliren uzun Token'i kopyalayın.")
+			fmt.Println("\n(Mevcut Token: " + maskToken(cfg.AniListToken) + ")")
+			fmt.Print("Yeni AniList Token (İptal için boş bırakın): ")
+			var newAniListToken string
+			fmt.Scanln(&newAniListToken)
+			if newAniListToken != "" {
+				cfg.AniListToken = newAniListToken
+				changesMade = true
+			} else {
+				fmt.Print("Tokeni silmek istiyor musunuz? (e/h): ")
+				var confirm string
+				fmt.Scanln(&confirm)
+				if strings.ToLower(confirm) == "e" {
+					cfg.AniListToken = ""
+					changesMade = true
+				}
+			}
+
+		case menuOptions[9]: // Geri
 			return
 		}
 
@@ -1147,13 +1185,15 @@ func SearchAnime(source models.AnimeSource, UiMode string, RofiFlags string, Log
 		animeTypes := make([]string, 0, len(searchData))
 		animeMap := make(map[string]models.Anime)
 
-		for _, item := range searchData {
+		for i, item := range searchData {
 			displayTitle := item.Title
+			var jikanImg string
 
 			if matched := jikan.MatchAnimeTitle(item.Title, jikanResults); matched != nil {
 				jikan.SetMalIDCache(item.Title, matched.MalID)
 				scoreStr := utils.FormatAnimeDetails(matched.Score, matched.Year, matched.Aired.From, matched.Genres)
 				displayTitle = item.Title + scoreStr
+				jikanImg = matched.GetThumbnail()
 			} else {
 				// Eşleşmeyenleri tekil olarak ara (Jikan Rate Limit: 3 req/sec)
 				time.Sleep(334 * time.Millisecond)
@@ -1164,12 +1204,19 @@ func SearchAnime(source models.AnimeSource, UiMode string, RofiFlags string, Log
 						jikan.SetMalIDCache(item.Title, matchedSpecific.MalID)
 						scoreStr := utils.FormatAnimeDetails(matchedSpecific.Score, matchedSpecific.Year, matchedSpecific.Aired.From, matchedSpecific.Genres)
 						displayTitle = item.Title + scoreStr
+						jikanImg = matchedSpecific.GetThumbnail()
 					} else {
 						jikan.SetMalIDCache(item.Title, specificResults[0].MalID)
 						scoreStr := utils.FormatAnimeDetails(specificResults[0].Score, specificResults[0].Year, specificResults[0].Aired.From, specificResults[0].Genres)
 						displayTitle = item.Title + scoreStr
+						jikanImg = specificResults[0].GetThumbnail()
 					}
 				}
+			}
+
+			if jikanImg != "" {
+				item.ImageURL = jikanImg
+				searchData[i].ImageURL = jikanImg
 			}
 
 			animeNames = append(animeNames, displayTitle)
@@ -1495,11 +1542,13 @@ func autoSearch(cfx *models.App, query string, timestamp time.Time) {
 	animeTypes := make([]string, len(searchData))
 	for i, item := range searchData {
 		displayTitle := item.Title
+		var jikanImg string
 		
 		if matched := jikan.MatchAnimeTitle(item.Title, jikanResults); matched != nil {
 			jikan.SetMalIDCache(item.Title, matched.MalID)
 			scoreStr := utils.FormatAnimeDetails(matched.Score, matched.Year, matched.Aired.From, matched.Genres)
 			displayTitle = item.Title + scoreStr
+			jikanImg = matched.GetThumbnail()
 		} else {
 			// Eşleşmeyenleri tekil olarak ara (Jikan Rate Limit: 3 req/sec)
 			time.Sleep(334 * time.Millisecond)
@@ -1510,12 +1559,19 @@ func autoSearch(cfx *models.App, query string, timestamp time.Time) {
 					jikan.SetMalIDCache(item.Title, matchedSpecific.MalID)
 					scoreStr := utils.FormatAnimeDetails(matchedSpecific.Score, matchedSpecific.Year, matchedSpecific.Aired.From, matchedSpecific.Genres)
 					displayTitle = item.Title + scoreStr
+					jikanImg = matchedSpecific.GetThumbnail()
 				} else {
 					jikan.SetMalIDCache(item.Title, specificResults[0].MalID)
 					scoreStr := utils.FormatAnimeDetails(specificResults[0].Score, specificResults[0].Year, specificResults[0].Aired.From, specificResults[0].Genres)
 					displayTitle = item.Title + scoreStr
+					jikanImg = specificResults[0].GetThumbnail()
 				}
 			}
+		}
+		
+		if jikanImg != "" {
+			item.ImageURL = jikanImg
+			searchData[i].ImageURL = jikanImg
 		}
 		
 		animeNames[i] = displayTitle

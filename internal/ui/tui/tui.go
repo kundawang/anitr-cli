@@ -338,6 +338,7 @@ type SelectionListModel struct {
 	err        error
 	width      int
 	rightPanel string
+	rightPanelFunc func(width int) string
 }
 
 func NewSelectionListModel(params internal.UiParams) SelectionListModel {
@@ -392,6 +393,7 @@ func NewSelectionListModel(params internal.UiParams) SelectionListModel {
 	return SelectionListModel{
 		list:       l,
 		rightPanel: params.RightPanel,
+		rightPanelFunc: params.RightPanelFunc,
 	}
 }
 
@@ -496,7 +498,13 @@ func (m SelectionListModel) View() string {
 		return ""
 	}
 	listView := m.list.View()
-	if m.rightPanel != "" {
+	
+	rp := m.rightPanel
+	if m.rightPanelFunc != nil {
+		rp = m.rightPanelFunc(m.width)
+	}
+
+	if rp != "" {
 		panelWidth := m.width - 48 - 6
 		if panelWidth < 10 {
 			panelWidth = 10
@@ -507,7 +515,7 @@ func (m SelectionListModel) View() string {
 			BorderForeground(lipgloss.Color("#e45cc0")).
 			Padding(1, 2).
 			MarginLeft(4).
-			Render(m.rightPanel)
+			Render(rp)
 		return lipgloss.JoinHorizontal(lipgloss.Top, listView, panelBox)
 	}
 	return listView
@@ -531,12 +539,13 @@ func SelectionList(params internal.UiParams) (string, error) {
 
 // Çoklu seçimli model
 type MultiSelectionListModel struct {
-	list       list.Model
-	selected   []string
-	quitting   bool
-	err        error
-	width      int
-	rightPanel string
+	list           list.Model
+	selected       []string
+	quitting       bool
+	err            error
+	width          int
+	rightPanel     string
+	rightPanelFunc func(width int) string
 }
 
 func NewMultiSelectionListModel(params internal.UiParams) MultiSelectionListModel {
@@ -590,6 +599,7 @@ func NewMultiSelectionListModel(params internal.UiParams) MultiSelectionListMode
 	return MultiSelectionListModel{
 		list:       l,
 		rightPanel: params.RightPanel,
+		rightPanelFunc: params.RightPanelFunc,
 	}
 }
 
@@ -721,13 +731,24 @@ func (m MultiSelectionListModel) View() string {
 		return ""
 	}
 	listView := m.list.View()
-	if m.rightPanel != "" {
+
+	rp := m.rightPanel
+	if m.rightPanelFunc != nil {
+		rp = m.rightPanelFunc(m.width)
+	}
+
+	if rp != "" {
+		panelWidth := m.width - 48 - 6
+		if panelWidth < 10 {
+			panelWidth = 10
+		}
 		panelBox := lipgloss.NewStyle().
+			Width(panelWidth).
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("#e45cc0")).
 			Padding(1, 2).
 			MarginLeft(4).
-			Render(m.rightPanel)
+			Render(rp)
 		return lipgloss.JoinHorizontal(lipgloss.Top, listView, panelBox)
 	}
 	return listView

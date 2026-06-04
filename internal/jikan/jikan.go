@@ -79,8 +79,8 @@ func GetMalIDByTitle(title string) (int, error) {
 		return matched.MalID, nil
 	}
 
-	malIDCache[title] = results[0].MalID
-	return results[0].MalID, nil
+	// Eğer hiçbir eşleşme barajı (threshold) geçemediyse ve MyAnimeList'te yoksa, hata döndür.
+	return 0, fmt.Errorf("Tam eşleşme bulunamadı. Şunu mu demek istediniz: %s?", results[0].Title)
 }
 
 // SearchAnime searches Jikan API for an anime and returns a list of results with details.

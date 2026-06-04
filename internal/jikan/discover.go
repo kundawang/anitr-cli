@@ -12,6 +12,17 @@ import (
 	"strconv"
 )
 
+type ImageType struct {
+	ImageURL      string `json:"image_url"`
+	SmallImageURL string `json:"small_image_url"`
+	LargeImageURL string `json:"large_image_url"`
+}
+
+type Images struct {
+	Jpg  ImageType `json:"jpg"`
+	WebP ImageType `json:"webp"`
+}
+
 type AnimeBasic struct {
 	MalID        int     `json:"mal_id"`
 	Title        string  `json:"title"`
@@ -28,6 +39,15 @@ type AnimeBasic struct {
 	Genres []struct {
 		Name string `json:"name"`
 	} `json:"genres"`
+	Images Images `json:"images"`
+}
+
+// GetThumbnail returns the small/regular image prioritizing webp format for list views
+func (a *AnimeBasic) GetThumbnail() string {
+	if a.Images.WebP.ImageURL != "" {
+		return a.Images.WebP.ImageURL
+	}
+	return a.Images.Jpg.ImageURL
 }
 
 type AnimeListResponse struct {
@@ -208,31 +228,112 @@ func CleanTitle(title string) string {
 	return strings.Join(fields, " ")
 }
 
+// LevenshteinDistance computes the Levenshtein distance between two strings.
+func LevenshteinDistance(s1, s2 string) int {
+	r1, r2 := []rune(s1), []rune(s2)
+	n, m := len(r1), len(r2)
+
+	if n == 0 {
+		return m
+	}
+	if m == 0 {
+		return n
+	}
+
+	d := make([][]int, n+1)
+	for i := range d {
+		d[i] = make([]int, m+1)
+		d[i][0] = i
+	}
+	for j := 0; j <= m; j++ {
+		d[0][j] = j
+	}
+
+	for i := 1; i <= n; i++ {
+		for j := 1; j <= m; j++ {
+			cost := 1
+			if r1[i-1] == r2[j-1] {
+				cost = 0
+			}
+			minCost := d[i-1][j] + 1
+			if d[i][j-1]+1 < minCost {
+				minCost = d[i][j-1] + 1
+			}
+			if d[i-1][j-1]+cost < minCost {
+				minCost = d[i-1][j-1] + cost
+			}
+			d[i][j] = minCost
+		}
+	}
+	return d[n][m]
+}
+
+// StringSimilarity returns a similarity score between 0.0 and 1.0.
+func StringSimilarity(s1, s2 string) float64 {
+	if s1 == "" || s2 == "" {
+		if s1 == s2 {
+			return 1.0
+		}
+		return 0.0
+	}
+	distance := LevenshteinDistance(s1, s2)
+	maxLen := len([]rune(s1))
+	if len([]rune(s2)) > maxLen {
+		maxLen = len([]rune(s2))
+	}
+	return 1.0 - float64(distance)/float64(maxLen)
+}
+
 // MatchAnimeTitle tries to find the best match for a source title in Jikan API results.
 func MatchAnimeTitle(sourceTitle string, jikanResults []AnimeBasic) *AnimeBasic {
 	cleanSource := CleanTitle(sourceTitle)
+	
+	var bestMatch *AnimeBasic
+	var bestScore float64 = 0.0
 
-	// 1. Exact or cleaned exact match
-	for _, j := range jikanResults {
+	for i := range jikanResults {
+		j := &jikanResults[i]
+		
+		// 1. Exact matches always win
 		if CleanTitle(j.Title) == cleanSource || CleanTitle(j.TitleEnglish) == cleanSource {
-			return &j
+			return j
 		}
 		for _, alt := range j.Titles {
 			if CleanTitle(alt.Title) == cleanSource {
-				return &j
+				return j
+			}
+		}
+
+		// Calculate similarities
+		scores := []float64{
+			StringSimilarity(cleanSource, CleanTitle(j.Title)),
+			StringSimilarity(cleanSource, CleanTitle(j.TitleEnglish)),
+		}
+		for _, alt := range j.Titles {
+			scores = append(scores, StringSimilarity(cleanSource, CleanTitle(alt.Title)))
+		}
+
+		// Check Contains as a high score alternative
+		if cleanSource != "" {
+			cleanJ := CleanTitle(j.Title)
+			cleanEng := CleanTitle(j.TitleEnglish)
+			if (cleanJ != "" && (strings.Contains(cleanSource, cleanJ) || strings.Contains(cleanJ, cleanSource))) || 
+			   (cleanEng != "" && (strings.Contains(cleanSource, cleanEng) || strings.Contains(cleanEng, cleanSource))) {
+				scores = append(scores, 0.85) // High base score for substring match
+			}
+		}
+
+		for _, score := range scores {
+			if score > bestScore {
+				bestScore = score
+				bestMatch = j
 			}
 		}
 	}
 
-	// 2. Partial match (contains)
-	for _, j := range jikanResults {
-		cleanJ := CleanTitle(j.Title)
-		cleanEng := CleanTitle(j.TitleEnglish)
-		
-		if (cleanJ != "" && (strings.Contains(cleanSource, cleanJ) || strings.Contains(cleanJ, cleanSource))) || 
-		   (cleanEng != "" && (strings.Contains(cleanSource, cleanEng) || strings.Contains(cleanEng, cleanSource))) {
-			return &j
-		}
+	// 0.60 benzerlik barajı
+	if bestScore >= 0.60 {
+		return bestMatch
 	}
 
 	return nil

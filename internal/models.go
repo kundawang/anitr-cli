@@ -26,6 +26,7 @@ type UiParams struct {
 	SkipSeasonSeparators bool    // Sezon ayırıcılarını atla (geçmiş menüsü için)
 	SkipAllSeparators    bool    // Tüm separator'ları atla
 	RightPanel           string  // Sağ panelde gösterilecek ekstra içerik
+	RightPanelFunc       func(width int) string // Dinamik sağ panel içerik üretici
 }
 
 // RPCParams, Discord Rich Presence için gönderilecek bilgileri içerir.
@@ -38,6 +39,13 @@ type RPCParams struct {
 	SmallImage string    // Küçük görselin adı
 	SmallText  string    // Küçük görsel üzerine gelindiğinde gösterilecek yazı
 	Timestamp  time.Time // Timestamp
+	Buttons    []ButtonParams // Butonlar
+}
+
+// ButtonParams, Discord RPC butonu için gerekli parametreleri içerir.
+type ButtonParams struct {
+	Label string
+	Url   string
 }
 
 // GetStringPtr, map içinden verilen anahtara karşılık gelen değeri *string olarak döner.
@@ -61,7 +69,7 @@ func GetString(m map[string]interface{}, key string) string {
 // GetJson, verilen URL'ye HTTP GET isteği gönderir, gelen JSON yanıtı çözümler.
 // Başarılı olursa çözülmüş veriyi interface{} olarak döner, aksi hâlde hata döner.
 func GetJson(url string, headers map[string]string) (interface{}, error) {
-	client := &http.Client{}
+	client := &http.Client{Timeout: 15 * time.Second}
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/prayjofir/anitr-cli/internal"
+	"github.com/prayjofir/anitr-cli/internal/config"
 	"github.com/prayjofir/anitr-cli/internal/helpers"
 	"github.com/prayjofir/anitr-cli/internal/jikan"
 	"github.com/prayjofir/anitr-cli/internal/models"
@@ -23,6 +24,7 @@ import (
 	"github.com/prayjofir/anitr-cli/internal/sources/anizium"
 	"github.com/prayjofir/anitr-cli/internal/sources/aniziumfree"
 	"github.com/prayjofir/anitr-cli/internal/sources/openanime"
+	"github.com/prayjofir/anitr-cli/internal/sync"
 	"github.com/prayjofir/anitr-cli/internal/ui"
 	"github.com/prayjofir/anitr-cli/internal/ui/tui"
 )
@@ -681,13 +683,13 @@ func ShowSelection(cfx models.App, list []string, label string) (string, error) 
 }
 
 // ShowSelectionWithPanel, yanında ekstra panel gösteren seçim ekranı
-func ShowSelectionWithPanel(cfx models.App, list []string, label string, rightPanel string) (string, error) {
+func ShowSelectionWithPanel(cfx models.App, list []string, label string, rightPanelFunc func(width int) string) (string, error) {
 	return ui.SelectionList(internal.UiParams{
-		Mode:       *cfx.UiMode,
-		RofiFlags:  cfx.RofiFlags,
-		List:       &list,
-		Label:      label,
-		RightPanel: rightPanel,
+		Mode:           *cfx.UiMode,
+		RofiFlags:      cfx.RofiFlags,
+		List:           &list,
+		Label:          label,
+		RightPanelFunc: rightPanelFunc,
 	})
 }
 
@@ -789,11 +791,13 @@ func GetSeasonPlaylistData(
 }
 
 // Discord RPC'yi güncelleyerek anime oynatma durumunu Discord'a yansıtır
-func UpdateDiscordRPC(socketPath string, episodeNames []string, selectedEpisodeIndex int,
-	selectedAnimeName, SelectedSource, posterURL string, timestamp time.Time, Logger *models.LogServ, stopCh <-chan struct{},
+func UpdateDiscordRPC(socketPath string, episodes []models.Episode, selectedEpisodeIndex int,
+	selectedAnimeName, SelectedSource, posterURL string, timestamp time.Time, malID int, Logger *models.LogServ, stopCh <-chan struct{},
 ) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+
+	anilistSyncedEpisodes := make(map[int]bool)
 
 	for {
 		select {
@@ -818,15 +822,19 @@ func UpdateDiscordRPC(socketPath string, episodeNames []string, selectedEpisodeI
 			if isPlaylistMode {
 				// Playlist modunda mevcut pozisyonu al
 				currentPos, err := player.GetCurrentPlaylistPos(socketPath)
-				if err != nil || currentPos < 0 || currentPos >= len(episodeNames) {
+				if err != nil || currentPos < 0 || currentPos >= len(episodes) {
 					continue
 				}
 				currentEpisodeIndex = currentPos
-				currentEpisodeName = episodeNames[currentPos]
+				currentEpisodeName = episodes[currentPos].Title
 			} else {
-				// Normal modda seçili bölümü kullan
+				// Tekil video modu
 				currentEpisodeIndex = selectedEpisodeIndex
-				currentEpisodeName = episodeNames[selectedEpisodeIndex]
+				if currentEpisodeIndex >= 0 && currentEpisodeIndex < len(episodes) {
+					currentEpisodeName = episodes[currentEpisodeIndex].Title
+				} else {
+					currentEpisodeName = fmt.Sprintf("Bölüm %d", selectedEpisodeIndex+1)
+				}
 			}
 
 			// MPV duraklatma durumu
@@ -839,6 +847,95 @@ func UpdateDiscordRPC(socketPath string, episodeNames []string, selectedEpisodeI
 			timePos, ok2 := timePosVal.(float64)
 			if !ok1 || !ok2 {
 				continue
+			}
+
+			// AniList Senkronizasyonu
+			if duration > 0 {
+				percentage := timePos / duration
+				if percentage >= 0.85 && !anilistSyncedEpisodes[currentEpisodeIndex] {
+					anilistSyncedEpisodes[currentEpisodeIndex] = true
+					
+					go func(epIdx int, mID int) {
+						appCfg, err := config.LoadConfig(filepath.Join(ConfigDir(), "config.json"))
+						if err != nil {
+							if Logger != nil { LogError(Logger, fmt.Errorf("anilist config load err: %v", err)) }
+							return
+						}
+						if appCfg.AniListToken == "" {
+							if Logger != nil { LogError(Logger, fmt.Errorf("anilist token is empty, cannot sync")) }
+							return
+						}
+						if mID <= 0 {
+							if Logger != nil { LogError(Logger, fmt.Errorf("invalid malID: %d", mID)) }
+							return
+						}
+
+						aniID, _, err := sync.GetAniListIdByMalId(mID)
+						if err != nil {
+							if Logger != nil { LogError(Logger, fmt.Errorf("GetAniListIdByMalId failed: %w", err)) }
+							return
+						}
+
+						progress := epIdx + 1
+						
+						// Eğer kaynaktan gelen veride özel bir "season_num" varsa, yeni iki yönlü tarayıcıyı kullan
+						var resolvedAniID int
+						var resolvedProgress int
+						var resolveErr error
+						seasonNum := 1
+						if currentEpisodeIndex >= 0 && currentEpisodeIndex < len(episodes) {
+							if snRaw, ok := episodes[currentEpisodeIndex].Extra["season_num"]; ok {
+								if snf, ok2 := snRaw.(float64); ok2 {
+									seasonNum = int(snf)
+								}
+							}
+						}
+
+						// Anizium gibi kaynaklar tüm sezonları tek bir liste (episodes) yapabilir.
+						// Eğer 1. Sezon eksikse (ilk bölümün sezon numarası > 1 ise), epIdx+1 mutlak sırayı ifade etmez!
+						// Bu durumda overflow mekanizması yanlış çalışacağı için direkt o bölümün "episode_num" değerini kullanmalıyız.
+						firstSeason := 1
+						if len(episodes) > 0 {
+							if fsRaw, ok := episodes[0].Extra["season_num"]; ok {
+								if fsf, ok2 := fsRaw.(float64); ok2 {
+									firstSeason = int(fsf)
+								}
+							}
+						}
+
+						if firstSeason > 1 && currentEpisodeIndex >= 0 && currentEpisodeIndex < len(episodes) {
+							if enRaw, ok := episodes[currentEpisodeIndex].Extra["episode_num"]; ok {
+								if enf, ok2 := enRaw.(float64); ok2 && int(enf) > 0 {
+									progress = int(enf)
+								} else if eni, ok3 := enRaw.(int); ok3 && eni > 0 {
+									progress = eni
+								}
+							}
+						}
+
+						// Force-Skip ile ileri doğru tarama yap
+						var maxEpisodes int
+						resolvedAniID, resolvedProgress, maxEpisodes, resolveErr = sync.ResolveAniListSequel(aniID, progress, seasonNum)
+						
+						if resolveErr != nil {
+							if Logger != nil { LogError(Logger, fmt.Errorf("ResolveAniList err: %v", resolveErr)) }
+							resolvedAniID = aniID
+							resolvedProgress = progress
+						}
+
+						status := ""
+						if maxEpisodes > 0 && resolvedProgress >= maxEpisodes {
+							status = "COMPLETED"
+						}
+
+						syncErr := sync.UpdateAniListProgress(appCfg.AniListToken, resolvedAniID, resolvedProgress, status)
+						if syncErr == nil && Logger != nil {
+							LogMsg(Logger, "AniList: Bölüm %d senkronize edildi (Durum: %s)", resolvedProgress, status)
+						} else if syncErr != nil && Logger != nil {
+							LogError(Logger, fmt.Errorf("anilist sync failed: %w", syncErr))
+						}
+					}(currentEpisodeIndex, malID)
+				}
 			}
 
 			formatTime := func(seconds float64) string {
@@ -872,15 +969,28 @@ func UpdateDiscordRPC(socketPath string, episodeNames []string, selectedEpisodeI
 				state += " (Paused)"
 			}
 
+			var buttons []internal.ButtonParams
+			buttons = append(buttons, internal.ButtonParams{
+				Label: "anitr-cli'yi İndir",
+				Url:   "https://github.com/prayjofir/anitr-cli",
+			})
+			if malID > 0 {
+				buttons = append(buttons, internal.ButtonParams{
+					Label: "MyAnimeList'te Gör",
+					Url:   fmt.Sprintf("https://myanimelist.net/anime/%d", malID),
+				})
+			}
+
 			params := internal.RPCParams{
 				Type:       3,
 				Details:    selectedAnimeName,
 				State:      state,
 				SmallImage: strings.ToLower(SelectedSource),
-				SmallText:  SelectedSource,
+				SmallText:  fmt.Sprintf("Kaynak: %s | anitr-cli", SelectedSource),
 				LargeImage: posterURL,
 				LargeText:  selectedAnimeName,
 				Timestamp:  timestamp,
+				Buttons:    buttons,
 			}
 
 			if err := rpc.DiscordRPC(params); err != nil {

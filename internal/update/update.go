@@ -27,7 +27,13 @@ func fetchAPI(url string) (*githubRelease, error) {
 		return nil, errors.New("API URL boş")
 	}
 
-	resp, err := http.Get(url)
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("istek oluşturulamadı: %w", err)
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("API'ye erişim başarısız: %w", err)
 	}

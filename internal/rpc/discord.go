@@ -35,6 +35,24 @@ func DiscordRPC(params internal.RPCParams) error {
 		return err
 	}
 
+	var discordButtons []*client.Button
+	for _, b := range params.Buttons {
+		discordButtons = append(discordButtons, &client.Button{
+			Label: b.Label,
+			Url:   b.Url,
+		})
+	}
+	
+	// Eğer buton yoksa varsayılan butonu ekle
+	if len(discordButtons) == 0 {
+		discordButtons = []*client.Button{
+			{
+				Label: "anitr-cli'yi İndir",
+				Url:   "https://github.com/prayjofir/anitr-cli",
+			},
+		}
+	}
+
 	// Discord aktivitesini ayarla
 	err := c.SetActivity(client.Activity{
 		Type:       params.Type,       // Aktivite tipi
@@ -44,12 +62,7 @@ func DiscordRPC(params internal.RPCParams) error {
 		LargeText:  params.LargeText,  // Büyük resim açıklaması
 		SmallImage: params.SmallImage, // Küçük resim
 		SmallText:  params.SmallText,  // Küçük resim açıklaması
-		Buttons: []*client.Button{ // Butonlar
-			{
-				Label: "GitHub",
-				Url:   "https://github.com/prayjofir/anitr-cli", // GitHub bağlantısı
-			},
-		},
+		Buttons:    discordButtons,    // Butonlar
 		Timestamps: &client.Timestamps{
 			Start: &params.Timestamp,
 		},
@@ -67,18 +80,14 @@ func DiscordRPC(params internal.RPCParams) error {
 
 	// Tekrar dene
 	if err := c.SetActivity(client.Activity{
+		Type:       params.Type,
 		State:      params.State,
 		Details:    params.Details,
 		LargeImage: params.LargeImage,
 		LargeText:  params.LargeText,
 		SmallImage: params.SmallImage,
 		SmallText:  params.SmallText,
-		Buttons: []*client.Button{
-			{
-				Label: "GitHub",
-				Url:   "https://github.com/prayjofir/anitr-cli",
-			},
-		},
+		Buttons:    discordButtons,
 		Timestamps: &client.Timestamps{
 			Start: &params.Timestamp,
 		},
