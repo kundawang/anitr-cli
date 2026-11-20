@@ -65,6 +65,18 @@ func subtitleHumanLabel(lang string) string {
 	}
 }
 
+// formatResumeTime, saniyeyi "DD:SS" veya "S:DD:SS" formatına çevirir (devam etiketi için)
+func formatResumeTime(sec float64) string {
+	total := int(sec + 0.5)
+	h := total / 3600
+	m := (total % 3600) / 60
+	s := total % 60
+	if h > 0 {
+		return fmt.Sprintf("%d:%02d:%02d", h, m, s)
+	}
+	return fmt.Sprintf("%02d:%02d", m, s)
+}
+
 // buildSeasonDisplay, bölüm listesine sezon ayırıcıları ekler.
 // Dönen displayList TUI'ya verilir; nameToIdx seçimi orijinal indekse çevirir.
 func buildSeasonDisplay(episodes []models.Episode, names []string) (displayList []string, nameToIdx map[string]int) {
@@ -557,11 +569,60 @@ func PlayAnimeLoop(
 				mpvTitle = selectedAnimeName
 			}
 
-			// Devam izleme: geçmişten kalindığı saniyeyi oku
+			// Bölüm ilerleme kaydı için stabil tanımlayıcılar
+			var selectedAnimeId string
+			if strings.ToLower(source.Source()) == "animecix" || strings.ToLower(source.Source()) == "anizium" || strings.ToLower(source.Source()) == "anizium free" {
+				selectedAnimeId = strconv.Itoa(selectedAnimeID)
+			} else {
+				selectedAnimeId = selectedAnimeSlug // openanime slug kullanır
+			}
+			animeKey := selectedAnimeId
+			if animeKey == "" {
+				animeKey = selectedAnimeName
+			}
+			episodeKey := episodes[selectedEpisodeIndex].ID
+			if episodeKey == "" {
+				episodeKey = episodeNames[selectedEpisodeIndex]
+			}
+			sourceKey := strings.ToLower(source.Source())
+
+			// Devam izleme: önce bölüm bazlı ilerleme kaydına bak (tüm kaynaklar)
 			var startPositionSec float64
-			if strings.ToLower(SelectedSource) == "anizium" || strings.ToLower(SelectedSource) == "anizium free" {
+			prog, hasProg, progErr := history.GetEpisodeProgress(sourceKey, animeKey, episodeKey)
+			if progErr != nil {
+				utils.LogError(Logger, progErr)
+			}
+			if hasProg && prog.PositionSec > 10 {
+				close(done) // spinner'ı durdur, seçim menüsü açılıyor
+
+				resumeLabel := fmt.Sprintf("▶ Kaldığın yerden devam et (%s)", formatResumeTime(prog.PositionSec))
+				choice, selErr := utils.ShowSelection(
+					models.App{UiMode: &UiMode, RofiFlags: &RofiFlags},
+					[]string{resumeLabel, "⏮ Baştan başlat"},
+					fmt.Sprintf("%s yarıda kalmış", episodeNames[selectedEpisodeIndex]),
+				)
+				if errors.Is(selErr, tui.ErrGoBack) {
+					continue // menüye dön
+				}
+				if selErr == nil && choice == resumeLabel {
+					startPositionSec = prog.PositionSec
+				} else if selErr == nil {
+					// Baştan başlat seçildi — eski ilerlemeyi temizle
+					if err := history.ClearEpisodeProgress(sourceKey, animeKey, episodeKey); err != nil {
+						utils.LogError(Logger, err)
+					}
+				}
+
+				// Spinner'ı yeniden başlat (MPV açılıyor)
+				done = make(chan struct{})
+				go ui.ShowLoading(internal.UiParams{
+					Mode:      UiMode,
+					RofiFlags: &RofiFlags,
+				}, "Başlatılıyor...", done)
+			} else if strings.ToLower(SelectedSource) == "anizium" || strings.ToLower(SelectedSource) == "anizium free" {
+				// Geriye dönük uyumluluk: eski history.json LastPositionSec kaydı
 				if freshHist, hErr := history.ReadAnimeHistory(); hErr == nil {
-					entry := freshHist[strings.ToLower(source.Source())][selectedAnimeName]
+					entry := freshHist[sourceKey][selectedAnimeName]
 					// Sadece bu bölüm için ve bitmemişse pozisyonu kullan
 					if entry.LastEpisodeIdx != nil &&
 						*entry.LastEpisodeIdx == selectedEpisodeIndex &&
@@ -654,23 +715,18 @@ func PlayAnimeLoop(
 				go utils.UpdateDiscordRPC(socketPath, episodes, selectedEpisodeIndex, selectedAnimeName, SelectedSource, posterURL, timestamp, currentMalID, Logger, stopCh)
 			}
 
-			var selectedAnimeId string
-			if strings.ToLower(source.Source()) == "animecix" || strings.ToLower(source.Source()) == "anizium" || strings.ToLower(source.Source()) == "anizium free" {
-				selectedAnimeId = strconv.Itoa(selectedAnimeID)
-			} else {
-				selectedAnimeId = selectedAnimeSlug // openanime slug kullanır
-			}
-
 			// History güncelleme için goroutine
 			go history.UpdateAnimeHistory(
 				socketPath,
-				strings.ToLower(source.Source()),
+				sourceKey,
 				selectedAnimeName,
 				episodeNames[selectedEpisodeIndex],
 				selectedAnimeId,
 				selectedEpisodeIndex,
 				len(episodes),
 				isMovie,
+				animeKey,
+				episodeKey,
 				Logger,
 			)
 
